@@ -188,6 +188,50 @@ List all completed reviews (most recent first).
 
 ---
 
+## Standards Layer & FHIR Artifact Endpoints
+
+CMS-0057 / Da Vinci endpoints backed by the policy-pack store (see
+[CMS-0057 / Da Vinci Standards Layer](./cms-0057-standards-layer.md) and the
+[PRD](./prd-cms0057-davinci.md)). All artifacts are synthetic demo output
+derived from reviewed policy packs — no live payer API is called.
+
+### `GET /api/policy-packs`
+
+List the policy packs loaded from disk plus the resolved packs directory.
+
+### `GET /api/policy-packs/{policy_set_id}`
+
+Full policy pack detail. Returns `404` for an unknown pack id.
+
+### `GET /api/policy-packs/{policy_set_id}/questionnaire`
+
+FHIR R4 `Questionnaire` (Da Vinci DTR-shaped) built from the pack's
+documentation requirements — one item per requirement, `linkId`s from the
+pack's `dtr_questionnaire_item_link_id`, attachment items where the pack
+requires an attachment.
+
+### `GET /api/policy-packs/{policy_set_id}/questionnaire-package`
+
+`Parameters` payload shaped like the DTR `$questionnaire-package` operation
+output: a collection `Bundle` holding the `Questionnaire` plus a `Library`
+carrying the pack's medical-necessity rules (human-readable text; no CQL yet).
+
+### `GET /api/review/{request_id}/dtr/questionnaire-response`
+
+Pre-populated FHIR `QuestionnaireResponse` for a completed review. MET
+requirements are answered with chart evidence and a DTR `information-origin`
+extension (`source = auto`); unmet requirements stay unanswered and carry the
+gap action. `status` is `completed` only when every required, non-conditional
+requirement is MET, otherwise `in-progress`.
+
+Returns `404` when the review does not exist or matched no policy pack.
+
+All three FHIR endpoints return `503` when `ENABLE_FHIR_ARTIFACTS=false`.
+The canonical base URL stamped into artifacts comes from `FHIR_CANONICAL_BASE`
+(default `https://prior-auth.example/fhir`).
+
+---
+
 ## `POST /api/decision`
 
 Submit a human reviewer decision (accept or override) for a completed review.

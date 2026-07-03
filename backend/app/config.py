@@ -49,6 +49,11 @@ class Settings:
     ENABLE_PAS_PREPARE: bool = os.getenv("ENABLE_PAS_PREPARE", "true").lower() == "true"
     # Override the policy-packs directory (defaults to <repo>/policy-packs).
     POLICY_PACKS_DIR: str = os.getenv("POLICY_PACKS_DIR", "")
+    # FHIR artifact generation (PRD Epic 1 — DTR Questionnaire / QuestionnaireResponse).
+    ENABLE_FHIR_ARTIFACTS: bool = os.getenv("ENABLE_FHIR_ARTIFACTS", "true").lower() == "true"
+    # Canonical base URL stamped into generated FHIR artifacts (Questionnaire.url, ...).
+    # Demo placeholder by default; override per deployment.
+    FHIR_CANONICAL_BASE: str = os.getenv("FHIR_CANONICAL_BASE", "https://prior-auth.example/fhir")
 
     # Optional auth/header for specific direct-HTTP deployments (rarely needed;
     # Foundry mode uses DefaultAzureCredential automatically).
