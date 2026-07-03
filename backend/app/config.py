@@ -54,6 +54,10 @@ class Settings:
     # Canonical base URL stamped into generated FHIR artifacts (Questionnaire.url, ...).
     # Demo placeholder by default; override per deployment.
     FHIR_CANONICAL_BASE: str = os.getenv("FHIR_CANONICAL_BASE", "https://prior-auth.example/fhir")
+    # CRD CDS Hooks service (PRD Epic 3). Provider-side discovery of coverage
+    # requirements at order time; derived from the policy-pack matcher, no live
+    # payer API. Mounted at the app root (/cds-services) per the CDS Hooks spec.
+    ENABLE_CRD_HOOKS: bool = os.getenv("ENABLE_CRD_HOOKS", "true").lower() == "true"
 
     # Optional auth/header for specific direct-HTTP deployments (rarely needed;
     # Foundry mode uses DefaultAzureCredential automatically).

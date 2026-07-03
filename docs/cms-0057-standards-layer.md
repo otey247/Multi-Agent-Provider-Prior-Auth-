@@ -141,6 +141,27 @@ The Standards Alignment panel exposes **Export FHIR artifacts** buttons (Questio
 
 ---
 
+## CRD as a CDS Hooks service (Da Vinci CRD)
+
+The policy-pack matcher is also exposed as a real **CDS Hooks** service — the same interface an EHR calls at order time to discover coverage requirements ([PRD Epic 3](./prd-cms0057-davinci.md)). It is mounted at the **application root** (not under `/api`) because CDS Hooks clients expect discovery at `{baseUrl}/cds-services`. Handler logic lives in [`backend/app/services/standards/crd_hooks.py`](../backend/app/services/standards/crd_hooks.py); models in [`backend/app/models/cds_hooks.py`](../backend/app/models/cds_hooks.py).
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /cds-services` | Discovery document advertising two services: `prior-auth-crd` (hook `order-select`) and `prior-auth-crd-sign` (hook `order-sign`), each with a `coverage` prefetch template |
+| `POST /cds-services/{service_id}` | Invoke a service with a CDS Hooks request; returns decision `cards` |
+
+The handler walks the hook `context` (`draftOrders` bundle, `selections`) and `prefetch` for the requested service (`ServiceRequest`/`DeviceRequest`/`MedicationRequest` codes → procedure/diagnosis) and coverage (`Coverage.payor.display` → payer, `Coverage.class[plan]` → plan), then calls `match_policy_pack()`. Cards:
+
+- **Match + PA required** → a `warning` card: "Prior authorization required — {policy}", routing channel and requirement count in the detail, and an `absolute` link to that pack's `/questionnaire-package` (the DTR hand-off). The link's host is taken from the incoming request, so it points back at whatever served the CDS call.
+- **Match + PA not required** → an `info` card.
+- **No match** → an `info` card noting the runtime Medicare LCD/NCD fallback — never a false assertion of certainty.
+
+`build_crd_response()` never raises: malformed input yields a safe non-blocking `info` card, so the service cannot 500. When `ENABLE_CRD_HOOKS=false`, discovery returns an empty `services` list and invocation returns `503`.
+
+Verified offline by `cd backend && python scripts/check_crd_hooks.py` (discovery shape; CPT 22612 / UHC Commercial → warning card with a questionnaire-package link; CPT 99213 / Aetna → info card; malformed input → safe card).
+
+---
+
 ## UI — Standards Alignment panel
 
 A new [`StandardsPanel`](../frontend/components/standards-panel.tsx) renders under the Submission Readiness header in the assessment tab:
@@ -175,8 +196,9 @@ It reuses the existing card/badge design, is collapsible so the baseline demo st
 | `ENABLE_POLICY_PACKS` | `true` | Enable pack matching |
 | `ENABLE_PAS_PREPARE` | `true` | Build the PAS package preview (never submits) |
 | `POLICY_PACKS_DIR` | *(unset)* | Override the packs directory (defaults to bundled `backend/policy_packs`) |
-| `ENABLE_FHIR_ARTIFACTS` | `true` | Serve the FHIR artifact endpoints (Questionnaire / package / QuestionnaireResponse); `503` when off |
+| `ENABLE_FHIR_ARTIFACTS` | `true` | Serve the FHIR artifact endpoints (Questionnaire / package / QuestionnaireResponse / PAS bundle); `503` when off |
 | `FHIR_CANONICAL_BASE` | `https://prior-auth.example/fhir` | Canonical base URL stamped into generated FHIR artifacts |
+| `ENABLE_CRD_HOOKS` | `true` | Serve the CRD CDS Hooks service at `/cds-services`; empty discovery + `503` invocation when off |
 
 ---
 
@@ -205,6 +227,7 @@ It reuses the existing card/badge design, is collapsible so the baseline demo st
 | Pack load + match | `cd backend && python scripts/check_policy_store.py` | PASS |
 | Standards service (offline) | `cd backend && python scripts/check_standards.py` | PASS |
 | FHIR artifacts (offline) | `cd backend && python scripts/check_fhir_artifacts.py` | PASS |
+| CRD CDS Hooks (offline) | `cd backend && python scripts/check_crd_hooks.py` | PASS |
 | Frontend types | `cd frontend && npx tsc --noEmit` | clean |
 | Pack shipped in image | `GET /api/policy-packs` | `count:1`, `/app/policy_packs` |
 | Full pipeline (live) | `python scripts/e2e_standards.py <backendUrl>` | PASS |

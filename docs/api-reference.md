@@ -246,6 +246,64 @@ All FHIR endpoints return `503` when `ENABLE_FHIR_ARTIFACTS=false`.
 The canonical base URL stamped into artifacts comes from `FHIR_CANONICAL_BASE`
 (default `https://prior-auth.example/fhir`).
 
+### CRD CDS Hooks service
+
+Mounted at the **application root** (not under `/api`) per the CDS Hooks spec.
+Cards are derived from the policy-pack matcher; no live payer API is called.
+Gated by `ENABLE_CRD_HOOKS` (default `true`).
+
+#### `GET /cds-services`
+
+CDS Hooks discovery. Advertises two services — `prior-auth-crd` (hook
+`order-select`) and `prior-auth-crd-sign` (hook `order-sign`). Returns an empty
+`services` list when the service is disabled.
+
+```json
+{
+  "services": [
+    {
+      "hook": "order-select",
+      "id": "prior-auth-crd",
+      "title": "Prior authorization coverage requirements discovery",
+      "description": "…",
+      "prefetch": { "coverage": "Coverage?patient={{context.patientId}}" }
+    }
+  ]
+}
+```
+
+#### `POST /cds-services/{service_id}`
+
+Invoke a CRD service with a CDS Hooks request. The handler extracts the
+requested service + coverage from `context.draftOrders` / `context.selections`
+/ `prefetch`, matches a policy pack, and returns cards.
+
+**Request body (abbreviated):**
+
+```json
+{
+  "hook": "order-select",
+  "hookInstance": "…",
+  "context": {
+    "patientId": "Patient/thomas-reed",
+    "draftOrders": { "resourceType": "Bundle", "entry": [
+      { "resource": { "resourceType": "ServiceRequest",
+        "code": { "coding": [{ "system": "http://www.ama-assn.org/go/cpt", "code": "22612" }] },
+        "reasonCode": [{ "coding": [{ "code": "M43.16" }] }] } }
+    ]}
+  },
+  "prefetch": { "coverage": { "resourceType": "Coverage",
+    "payor": [{ "display": "UnitedHealthcare" }],
+    "class": [{ "type": { "coding": [{ "code": "plan" }] }, "value": "Commercial HMO" }] } }
+}
+```
+
+**Response:** a `warning` card when PA is required (with a link to that pack's
+`/questionnaire-package`), an `info` card when not required or when no pack
+matches. `400` on a malformed body, `404` for an unknown `service_id`, `503`
+when disabled. The handler never returns `500` — malformed context yields a
+safe non-blocking `info` card.
+
 ---
 
 ## `POST /api/decision`

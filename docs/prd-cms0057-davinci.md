@@ -2,7 +2,7 @@
 
 **Product:** Provider Prior Authorization Multi-Agent Solution Accelerator
 **Scope:** Evolve the existing CRD/DTR/PAS-lite [standards layer](./cms-0057-standards-layer.md) into a demonstrably standards-conformant CMS-0057-F / HL7 Da Vinci implementation, plus the provider-side lifecycle features the rule makes operationally urgent.
-**Status:** Draft v1.1 — Epics 1–2 implemented; Epics 3–8 ready for implementation
+**Status:** Draft v1.2 — Epics 1–3 implemented; Epics 4–8 ready for implementation
 **Audience:** This PRD is written so each task is directly implementable by Claude Code — every task names the concrete files to create or edit and each epic has verifiable acceptance criteria.
 
 ---
@@ -122,9 +122,11 @@ Epics are ordered so each builds on the previous. Epic 1 converts the existing D
 
 ---
 
-### Epic 3 — CRD as a CDS Hooks service
+### Epic 3 — CRD as a CDS Hooks service ✅ *implemented*
 
 > **Da Vinci IG:** CRD (Coverage Requirements Discovery). **CMS-0057 tie-in:** the Prior Authorization API's discovery phase.
+>
+> *Implementation note:* the questionnaire-package link is emitted as an `absolute` link (a direct FHIR endpoint URL) rather than a `smart` app-launch link, since the target is a data endpoint, not a SMART launch. Two services are advertised (`prior-auth-crd` / `prior-auth-crd-sign`); the handler is hook-agnostic.
 
 **Goal:** Expose the policy-pack matcher as a real CDS Hooks service — the same interface an EHR would call at order time — returning cards ("PA required — 8 documentation requirements — launch DTR") derived from `match_policy_pack()`.
 
