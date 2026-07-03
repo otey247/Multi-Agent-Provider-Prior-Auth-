@@ -2,7 +2,7 @@
 
 **Product:** Provider Prior Authorization Multi-Agent Solution Accelerator
 **Scope:** Evolve the existing CRD/DTR/PAS-lite [standards layer](./cms-0057-standards-layer.md) into a demonstrably standards-conformant CMS-0057-F / HL7 Da Vinci implementation, plus the provider-side lifecycle features the rule makes operationally urgent.
-**Status:** Draft v1.0 — Epic 1 implemented; Epics 2–8 ready for implementation
+**Status:** Draft v1.1 — Epics 1–2 implemented; Epics 3–8 ready for implementation
 **Audience:** This PRD is written so each task is directly implementable by Claude Code — every task names the concrete files to create or edit and each epic has verifiable acceptance criteria.
 
 ---
@@ -91,7 +91,7 @@ Epics are ordered so each builds on the previous. Epic 1 converts the existing D
 
 ---
 
-### Epic 2 — PAS request Bundle builder + FHIR export UI
+### Epic 2 — PAS request Bundle builder + FHIR export UI ✅ *implemented*
 
 > **Da Vinci IG:** PAS (Prior Authorization Support). **CMS-0057 tie-in:** the Prior Authorization API's submission phase.
 

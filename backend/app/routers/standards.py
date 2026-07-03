@@ -14,6 +14,7 @@ from app.services.policy_store import (
     policy_packs_dir,
 )
 from app.services.standards import (
+    pas_bundle_from_review,
     questionnaire_from_pack,
     questionnaire_package_from_pack,
     questionnaire_response_from_assessment,
@@ -96,14 +97,8 @@ async def get_pack_questionnaire_package(policy_set_id: str):
     return questionnaire_package_from_pack(pack, canonical_base=settings.FHIR_CANONICAL_BASE)
 
 
-@router.get("/review/{request_id}/dtr/questionnaire-response")
-async def get_review_questionnaire_response(request_id: str):
-    """Pre-populated QuestionnaireResponse for a completed review.
-
-    MET requirements are answered with chart evidence (DTR information-origin
-    ``auto``); unmet requirements stay unanswered and carry the gap action.
-    """
-    _require_fhir_enabled()
+def _load_review_standards(request_id: str):
+    """Stored review + matched pack for FHIR artifact endpoints (404s inside)."""
     # Lazy import: keeps this router importable without the orchestrator's
     # heavier dependency stack (used by offline check scripts).
     from app.agents.orchestrator import get_review
@@ -117,14 +112,46 @@ async def get_review_questionnaire_response(request_id: str):
             status_code=404,
             detail=(
                 f"Review {request_id} has no matched policy pack — "
-                "no DTR questionnaire response is available"
+                "no FHIR artifacts are available"
             ),
         )
     pack = _require_pack(standards.get("policy_set_id", ""))
+    return standards, pack, stored.get("request_data") or {}
+
+
+@router.get("/review/{request_id}/dtr/questionnaire-response")
+async def get_review_questionnaire_response(request_id: str):
+    """Pre-populated QuestionnaireResponse for a completed review.
+
+    MET requirements are answered with chart evidence (DTR information-origin
+    ``auto``); unmet requirements stay unanswered and carry the gap action.
+    """
+    _require_fhir_enabled()
+    standards, pack, request_data = _load_review_standards(request_id)
     return questionnaire_response_from_assessment(
         standards,
         pack,
-        stored.get("request_data") or {},
+        request_data,
+        request_id,
+        canonical_base=settings.FHIR_CANONICAL_BASE,
+    )
+
+
+@router.get("/review/{request_id}/pas/bundle")
+async def get_review_pas_bundle(request_id: str):
+    """PAS-shaped request Bundle for a completed review (export only).
+
+    Claim (use = preauthorization) plus Patient, Coverage, Practitioner, payer
+    Organization, ServiceRequest, DocumentReference stubs, and the DTR
+    QuestionnaireResponse. Never submitted anywhere; a not-PAS-ready review
+    exports with an explicit ``missing-for-submission`` annotation on the Claim.
+    """
+    _require_fhir_enabled()
+    standards, pack, request_data = _load_review_standards(request_id)
+    return pas_bundle_from_review(
+        standards,
+        pack,
+        request_data,
         request_id,
         canonical_base=settings.FHIR_CANONICAL_BASE,
     )

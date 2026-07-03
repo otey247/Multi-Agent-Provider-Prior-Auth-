@@ -1,11 +1,12 @@
-"""Standalone behavioral check for the DTR FHIR artifact builders (PRD Epic 1).
+"""Standalone behavioral check for the FHIR artifact builders (PRD Epics 1–2).
 
 Run from backend/:
     python scripts/check_fhir_artifacts.py
 
-Builds the FHIR Questionnaire, $questionnaire-package Parameters, and the
-pre-populated QuestionnaireResponse from the flagship policy pack + the real
-orthopedics sample case (no agents, no network). Exits non-zero on failure.
+Builds the FHIR Questionnaire, $questionnaire-package Parameters, the
+pre-populated QuestionnaireResponse, and the PAS request Bundle from the
+flagship policy pack + the real orthopedics sample case (no agents, no
+network). Exits non-zero on failure.
 """
 
 import base64
@@ -17,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.services.policy_store import match_policy_pack  # noqa: E402
 from app.services.standards import (  # noqa: E402
     build_standards_assessment,
+    pas_bundle_from_review,
     questionnaire_from_pack,
     questionnaire_package_from_pack,
     questionnaire_response_from_assessment,
@@ -181,6 +183,87 @@ def main() -> int:
     print("\nAssertions (gap-free variant):")
     check("status completed", qr_done["status"] == "completed")
     check("all 8 items answered", len(done_answered) == 8)
+
+    # --- PAS request Bundle (flagship case: not PAS-ready) ---
+    bundle = pas_bundle_from_review(assessment, pack, ORTHO_REQUEST, "check-run-1")
+    entries = bundle["entry"]
+    resource_types = [e["resource"]["resourceType"] for e in entries]
+    claim = entries[0]["resource"]
+    full_urls = {e["fullUrl"] for e in entries}
+    references = []
+
+    def _collect_refs(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "reference" and isinstance(value, str):
+                    references.append(value)
+                else:
+                    _collect_refs(value)
+        elif isinstance(node, list):
+            for value in node:
+                _collect_refs(value)
+
+    _collect_refs(bundle)
+
+    def _si_by_code(code):
+        return [
+            si for si in claim["supportingInfo"]
+            if any(c.get("code") == code for c in si["category"]["coding"])
+        ]
+
+    print("\nPAS request Bundle (flagship case):")
+    print(f"  entries={len(entries)}  types={sorted(set(resource_types))}")
+    print(f"  supportingInfo={len(claim['supportingInfo'])}")
+
+    print("\nAssertions (PAS Bundle):")
+    check("collection Bundle with PAS profile",
+          bundle["type"] == "collection"
+          and any("davinci-pas" in p for p in bundle["meta"]["profile"]))
+    check("synthetic-demo tag on Bundle",
+          any(t.get("code") == "synthetic-demo" for t in bundle["meta"].get("tag", [])))
+    check("Claim is the first entry", resource_types[0] == "Claim")
+    check("Claim.use preauthorization", claim["use"] == "preauthorization")
+    check("8 documentation-requirement supportingInfo entries",
+          len(_si_by_code("documentation-requirement")) == 8)
+    check("QuestionnaireResponse referenced from supportingInfo",
+          len(_si_by_code("dtr-questionnaire-response")) == 1)
+    check("4 attachment supportingInfo entries", len(_si_by_code("attachment")) == 4)
+    check("supportingInfo sequences are 1..N",
+          [si["sequence"] for si in claim["supportingInfo"]]
+          == list(range(1, len(claim["supportingInfo"]) + 1)))
+    check("3 diagnoses (ICD-10)", len(claim["diagnosis"]) == 3)
+    check("2 items (CPT)", len(claim["item"]) == 2)
+    check("4 DocumentReference entries", resource_types.count("DocumentReference") == 4)
+    check("Patient/Coverage/Practitioner/Organization/ServiceRequest/QR present",
+          all(rt in resource_types for rt in (
+              "Patient", "Coverage", "Practitioner", "Organization",
+              "ServiceRequest", "QuestionnaireResponse")))
+    check("facility Location present (servicing facility set)",
+          "Location" in resource_types and "facility" in claim)
+    check("all bundle-internal references resolve to fullUrls",
+          all(r in full_urls for r in references if r.startswith("urn:uuid:")))
+    check("not-ready Claim carries missing-for-submission extensions",
+          any(e["url"].endswith("missing-for-submission")
+              for e in claim.get("extension", [])))
+    check("missing annotation mentions the PT discharge gap",
+          any("discharge" in e.get("valueString", "").lower()
+              for e in claim.get("extension", [])))
+    check("deterministic rebuild (stable urn:uuid ids)",
+          pas_bundle_from_review(assessment, pack, ORTHO_REQUEST, "check-run-1")["entry"][0]["fullUrl"]
+          == entries[0]["fullUrl"])
+
+    # --- PAS Bundle for the gap-free variant: ready, no annotation ---
+    bundle_done = pas_bundle_from_review(
+        complete_assessment, pack, complete_request, "check-run-2",
+    )
+    claim_done = bundle_done["entry"][0]["resource"]
+    print("\nAssertions (PAS Bundle, gap-free variant):")
+    check("ready Claim has no missing-for-submission extension",
+          not any(e["url"].endswith("missing-for-submission")
+                  for e in claim_done.get("extension", [])))
+    check("5 DocumentReference entries (extra PT discharge attachment)",
+          sum(1 for e in bundle_done["entry"]
+              if e["resource"]["resourceType"] == "DocumentReference") == 5)
 
     print("\nRESULT:", "PASS" if ok else "FAIL")
     return 0 if ok else 1

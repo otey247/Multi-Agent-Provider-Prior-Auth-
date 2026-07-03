@@ -127,6 +127,7 @@ The standards layer can render its policy-pack data and DTR-lite evaluations as 
 | `Questionnaire` | Pack `documentation_requirements` (one item per requirement; `linkId` from `dtr_questionnaire_item_link_id`; attachment items where `attachment_required`) | `GET /api/policy-packs/{id}/questionnaire` |
 | `Parameters` (DTR `$questionnaire-package` shape) | The `Questionnaire` plus a `Library` carrying `medical_necessity_criteria` as human-readable logic (no CQL yet) | `GET /api/policy-packs/{id}/questionnaire-package` |
 | `QuestionnaireResponse` | A completed review's DTR-lite `requirement_evaluations` — MET items answered with evidence + the DTR `information-origin` extension (`source = auto`); unmet items unanswered with the gap action attached | `GET /api/review/{request_id}/dtr/questionnaire-response` |
+| PAS request `Bundle` | The full packet as a Da Vinci PAS-shaped Bundle — `Claim` (`use = preauthorization`) with per-requirement `supportingInfo`, plus `Patient`, `Coverage`, `Practitioner`, payer `Organization`, `ServiceRequest`, the `QuestionnaireResponse`, and stub `DocumentReference`s for attachments. Export only — never submitted. Not-ready reviews carry a `missing-for-submission` extension per open gap | `GET /api/review/{request_id}/pas/bundle` |
 
 Conventions:
 
@@ -134,7 +135,9 @@ Conventions:
 - `QuestionnaireResponse.status` is `completed` only when every required, non-conditional requirement is MET — otherwise `in-progress`, so the artifact itself shows the remaining human work.
 - Every artifact embeds the synthetic-demo disclaimer; the canonical base URL is a placeholder (`FHIR_CANONICAL_BASE`) so generated artifacts cannot be mistaken for a live payer feed.
 
-Verified offline by `cd backend && python scripts/check_fhir_artifacts.py` (flagship pack → 8-item Questionnaire; flagship sample case → 6 answered / 2 unanswered, `in-progress`; gap-free variant → `completed`).
+Verified offline by `cd backend && python scripts/check_fhir_artifacts.py` (flagship pack → 8-item Questionnaire; flagship sample case → 6 answered / 2 unanswered, `in-progress`; gap-free variant → `completed`; PAS Bundle → Claim-first collection with resolving references, `missing-for-submission` annotation only when not ready).
+
+The Standards Alignment panel exposes **Export FHIR artifacts** buttons (Questionnaire, QuestionnaireResponse, PAS Bundle) that download the JSON for the current review via these endpoints.
 
 ---
 
@@ -162,6 +165,7 @@ It reuses the existing card/badge design, is collapsible so the baseline demo st
 | `GET /api/policy-packs/{policy_set_id}/questionnaire` | FHIR R4 `Questionnaire` (DTR-shaped) built from the pack |
 | `GET /api/policy-packs/{policy_set_id}/questionnaire-package` | DTR `$questionnaire-package`-shaped `Parameters` (Questionnaire + rules `Library`) |
 | `GET /api/review/{request_id}/dtr/questionnaire-response` | Pre-populated `QuestionnaireResponse` for a completed review (404 when no pack matched) |
+| `GET /api/review/{request_id}/pas/bundle` | PAS-shaped request `Bundle` for a completed review (export only; 404 when no pack matched) |
 
 ### Feature flags ([`backend/app/config.py`](../backend/app/config.py))
 

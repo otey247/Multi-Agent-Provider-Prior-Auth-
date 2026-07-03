@@ -226,7 +226,23 @@ requirement is MET, otherwise `in-progress`.
 
 Returns `404` when the review does not exist or matched no policy pack.
 
-All three FHIR endpoints return `503` when `ENABLE_FHIR_ARTIFACTS=false`.
+### `GET /api/review/{request_id}/pas/bundle`
+
+PAS-shaped FHIR request `Bundle` for a completed review (export only — never
+submitted anywhere). The first entry is a `Claim` with `use =
+"preauthorization"`, followed by `Patient`, `Coverage`, `Practitioner`, the
+payer `Organization`, a `ServiceRequest`, the pre-populated
+`QuestionnaireResponse`, a `Location` (when a servicing facility is set), and
+one stub `DocumentReference` per attached note type. `Claim.supportingInfo`
+references the QuestionnaireResponse and enumerates every documentation
+requirement with its MET / INSUFFICIENT / MISSING status. A not-PAS-ready
+review still exports, but the `Claim` carries one `missing-for-submission`
+extension per open gap so the artifact itself is explicit about
+incompleteness.
+
+Returns `404` when the review does not exist or matched no policy pack.
+
+All FHIR endpoints return `503` when `ENABLE_FHIR_ARTIFACTS=false`.
 The canonical base URL stamped into artifacts comes from `FHIR_CANONICAL_BASE`
 (default `https://prior-auth.example/fhir`).
 

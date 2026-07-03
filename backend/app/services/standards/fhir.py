@@ -1,7 +1,7 @@
-"""FHIR R4 artifact builders for the standards layer (PRD Epic 1 — DTR).
+"""FHIR R4 artifact builders for the standards layer (PRD Epics 1–2).
 
 Renders the existing policy-pack / standards-assessment data as Da Vinci
-DTR-shaped FHIR R4 resources:
+DTR/PAS-shaped FHIR R4 resources:
 
   * ``questionnaire_from_pack``           — a ``Questionnaire`` whose items map
     1:1 to the pack's ``documentation_requirements``.
@@ -13,6 +13,11 @@ DTR-shaped FHIR R4 resources:
     pre-populated from a completed review's DTR-lite evaluation: MET
     requirements are answered (with evidence and a DTR information-origin
     extension), unmet requirements stay unanswered and carry the gap action.
+  * ``pas_bundle_from_review``            — a PAS request ``Bundle`` (Claim
+    with ``use = preauthorization`` + Patient, Coverage, Practitioner, payer
+    Organization, ServiceRequest, DocumentReference stubs, and the DTR
+    QuestionnaireResponse) assembled from a completed review. Never submitted
+    anywhere — it is the exportable, standards-shaped view of the packet.
 
 Everything is built as plain dicts (no new dependencies) so the FHIR shape
 lives in exactly one module. Artifacts are synthetic demo output derived from
@@ -23,6 +28,8 @@ stamped into every resource.
 from __future__ import annotations
 
 import base64
+import re
+import uuid
 from datetime import datetime, timezone
 
 from app.models.standards import DocumentationRequirement, PolicySet
@@ -38,12 +45,22 @@ DTR_QUESTIONNAIRE_RESPONSE_PROFILE = (
 DTR_INFORMATION_ORIGIN_EXT = (
     "http://hl7.org/fhir/us/davinci-dtr/StructureDefinition/information-origin"
 )
+PAS_REQUEST_BUNDLE_PROFILE = (
+    "http://hl7.org/fhir/us/davinci-pas/StructureDefinition/profile-pas-request-bundle"
+)
+PAS_CLAIM_PROFILE = (
+    "http://hl7.org/fhir/us/davinci-pas/StructureDefinition/profile-claim"
+)
 
 # Repo-scoped namespace for demo annotations with no official DTR equivalent
 # (requirement evaluation status, confidence, gap action, disclaimer).
 LOCAL_EXT_BASE = (
     "https://github.com/otey247/Multi-Agent-Provider-Prior-Auth"
     "/fhir/StructureDefinition"
+)
+LOCAL_CS_BASE = (
+    "https://github.com/otey247/Multi-Agent-Provider-Prior-Auth"
+    "/fhir/CodeSystem"
 )
 
 # Default canonical base stamped into Questionnaire.url / Library.url.
@@ -289,3 +306,289 @@ def questionnaire_response_from_assessment(
     if patient_name:
         response["subject"] = {"display": patient_name}
     return response
+
+
+# --- PAS request Bundle (PRD Epic 2) -----------------------------------------
+
+ICD10_SYSTEM = "http://hl7.org/fhir/sid/icd-10-cm"
+CPT_SYSTEM = "http://www.ama-assn.org/go/cpt"
+NPI_SYSTEM = "http://hl7.org/fhir/sid/us-npi"
+CLAIM_INFO_CATEGORY_SYSTEM = (
+    "http://terminology.hl7.org/CodeSystem/claiminformationcategory"
+)
+
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _urn(request_id: str, resource_key: str) -> str:
+    """Deterministic urn:uuid fullUrl for a bundle entry (stable per review)."""
+    return "urn:uuid:" + str(
+        uuid.uuid5(uuid.NAMESPACE_URL, f"pas/{request_id}/{resource_key}")
+    )
+
+
+def _supporting_info_category(code: str, text: str = "") -> dict:
+    category = {
+        "coding": [
+            {"system": CLAIM_INFO_CATEGORY_SYSTEM, "code": "info"},
+            {"system": f"{LOCAL_CS_BASE}/supporting-info-category", "code": code},
+        ],
+    }
+    if text:
+        category["text"] = text
+    return category
+
+
+def pas_bundle_from_review(
+    assessment: dict,
+    pack: PolicySet,
+    request_data: dict,
+    request_id: str,
+    *,
+    canonical_base: str = DEFAULT_CANONICAL_BASE,
+) -> dict:
+    """Assemble a PAS-shaped request Bundle from a completed review.
+
+    The Bundle is the exportable, standards-conformant view of the packet —
+    it is built for inspection/export and is never submitted anywhere. When
+    the review is not PAS-ready, the Claim carries a ``missing-for-submission``
+    extension per open gap so an incomplete export is explicit about it.
+    """
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    urls = {key: _urn(request_id, key) for key in (
+        "claim", "patient", "coverage", "practitioner", "insurer",
+        "location", "service-request", "questionnaire-response",
+    )}
+
+    def _ref(key: str) -> dict:
+        return {"reference": urls[key]}
+
+    def _rid(key: str) -> str:
+        return urls[key].removeprefix("urn:uuid:")
+
+    # --- Referenced resources -------------------------------------------------
+    patient = {
+        "resourceType": "Patient",
+        "id": _rid("patient"),
+        "name": [{"text": str(request_data.get("patient_name") or "")}],
+    }
+    dob = str(request_data.get("patient_dob") or "")
+    if _DATE_RE.match(dob):
+        patient["birthDate"] = dob
+
+    insurer = {
+        "resourceType": "Organization",
+        "id": _rid("insurer"),
+        "name": str(request_data.get("payer_name") or pack.payer),
+        "active": True,
+    }
+
+    practitioner = {
+        "resourceType": "Practitioner",
+        "id": _rid("practitioner"),
+        "name": [{"text": str(request_data.get("ordering_provider_name") or "")}],
+    }
+    npi = str(
+        request_data.get("ordering_provider_npi")
+        or request_data.get("provider_npi")
+        or ""
+    )
+    if npi:
+        practitioner["identifier"] = [{"system": NPI_SYSTEM, "value": npi}]
+
+    coverage = {
+        "resourceType": "Coverage",
+        "id": _rid("coverage"),
+        "status": "active",
+        "beneficiary": _ref("patient"),
+        "payor": [_ref("insurer")],
+    }
+    insurance_id = str(request_data.get("insurance_id") or "")
+    if insurance_id:
+        coverage["subscriberId"] = insurance_id
+    plan = str(request_data.get("payer_plan") or pack.plan)
+    if plan:
+        coverage["class"] = [{
+            "type": {"coding": [{
+                "system": "http://terminology.hl7.org/CodeSystem/coverage-class",
+                "code": "plan",
+            }]},
+            "value": plan,
+        }]
+
+    procedure_codes = [str(c) for c in (request_data.get("procedure_codes") or [])]
+    diagnosis_codes = [str(c) for c in (request_data.get("diagnosis_codes") or [])]
+    service_request = {
+        "resourceType": "ServiceRequest",
+        "id": _rid("service-request"),
+        "status": "active",
+        "intent": "order",
+        "subject": _ref("patient"),
+        "requester": _ref("practitioner"),
+        "code": {
+            "coding": [{"system": CPT_SYSTEM, "code": c} for c in procedure_codes],
+            "text": ", ".join(procedure_codes),
+        },
+    }
+
+    facility_name = str(request_data.get("servicing_facility") or "")
+    location = None
+    if facility_name:
+        location = {
+            "resourceType": "Location",
+            "id": _rid("location"),
+            "name": facility_name,
+        }
+
+    attached = [str(a) for a in (request_data.get("attached_note_types") or []) if str(a)]
+    doc_urls = [_urn(request_id, f"document-{i}") for i in range(len(attached))]
+    document_references = [
+        {
+            "resourceType": "DocumentReference",
+            "id": doc_urls[i].removeprefix("urn:uuid:"),
+            "status": "current",
+            "subject": _ref("patient"),
+            "description": title,
+            # Stub attachment — the demo carries document *names*, not bytes.
+            "content": [{"attachment": {"contentType": "text/plain", "title": title}}],
+        }
+        for i, title in enumerate(attached)
+    ]
+
+    questionnaire_response = questionnaire_response_from_assessment(
+        assessment, pack, request_data, request_id, canonical_base=canonical_base,
+    )
+    questionnaire_response["id"] = _rid("questionnaire-response")
+
+    # --- Claim ----------------------------------------------------------------
+    supporting_info: list[dict] = [{
+        "sequence": 1,
+        "category": _supporting_info_category(
+            "dtr-questionnaire-response", "DTR questionnaire response"
+        ),
+        "valueReference": _ref("questionnaire-response"),
+    }, {
+        "sequence": 2,
+        "category": _supporting_info_category("requested-service", "Requested service"),
+        "valueReference": _ref("service-request"),
+    }]
+    sequence = 3
+    evaluations = (assessment.get("dtr") or {}).get("requirement_evaluations") or []
+    for evaluation in evaluations:
+        entry = {
+            "sequence": sequence,
+            "category": _supporting_info_category(
+                "documentation-requirement", evaluation.get("description", "")
+            ),
+            "valueString": evaluation.get("status", "MISSING"),
+            "extension": [
+                _local_ext("requirement-id", "valueString",
+                           evaluation.get("requirement_id", "")),
+                _local_ext("evaluation-confidence", "valueInteger",
+                           int(evaluation.get("confidence", 0))),
+            ],
+        }
+        gap_action = evaluation.get("gap_action") or ""
+        if gap_action:
+            entry["extension"].append(_local_ext("gap-action", "valueString", gap_action))
+        supporting_info.append(entry)
+        sequence += 1
+    for i, title in enumerate(attached):
+        supporting_info.append({
+            "sequence": sequence,
+            "category": _supporting_info_category("attachment", title),
+            "valueReference": {"reference": doc_urls[i]},
+        })
+        sequence += 1
+
+    claim = {
+        "resourceType": "Claim",
+        "id": _rid("claim"),
+        "meta": {"profile": [PAS_CLAIM_PROFILE]},
+        "status": "active",
+        "type": {"coding": [{
+            "system": "http://terminology.hl7.org/CodeSystem/claim-type",
+            "code": "professional",
+        }]},
+        "use": "preauthorization",
+        "patient": _ref("patient"),
+        "created": now,
+        "insurer": _ref("insurer"),
+        "provider": _ref("practitioner"),
+        "priority": {"coding": [{
+            "system": "http://terminology.hl7.org/CodeSystem/processpriority",
+            "code": "stat" if request_data.get("urgency") == "urgent" else "normal",
+        }]},
+        "insurance": [{"sequence": 1, "focal": True, "coverage": _ref("coverage")}],
+        "diagnosis": [
+            {
+                "sequence": i + 1,
+                "diagnosisCodeableConcept": {
+                    "coding": [{"system": ICD10_SYSTEM, "code": code}],
+                },
+            }
+            for i, code in enumerate(diagnosis_codes)
+        ],
+        "item": [
+            {
+                "sequence": i + 1,
+                "productOrService": {
+                    "coding": [{"system": CPT_SYSTEM, "code": code}],
+                },
+            }
+            for i, code in enumerate(procedure_codes)
+        ],
+        "supportingInfo": supporting_info,
+    }
+    specialty = str(request_data.get("rendering_provider_specialty") or "")
+    if specialty:
+        claim["careTeam"] = [{
+            "sequence": 1,
+            "provider": _ref("practitioner"),
+            "qualification": {"text": specialty},
+        }]
+    if location:
+        claim["facility"] = _ref("location")
+
+    # Explicit incompleteness annotation — an export of a not-ready packet must
+    # say so in the artifact itself, not only in the UI.
+    pas = assessment.get("pas") or {}
+    if not pas.get("pas_ready"):
+        missing = [str(m) for m in (pas.get("missing_for_submission") or [])] or [
+            "PAS readiness could not be evaluated for this review."
+        ]
+        claim["extension"] = [
+            _local_ext("missing-for-submission", "valueString", m) for m in missing
+        ]
+
+    entries = [
+        {"fullUrl": urls["claim"], "resource": claim},
+        {"fullUrl": urls["patient"], "resource": patient},
+        {"fullUrl": urls["coverage"], "resource": coverage},
+        {"fullUrl": urls["practitioner"], "resource": practitioner},
+        {"fullUrl": urls["insurer"], "resource": insurer},
+        {"fullUrl": urls["service-request"], "resource": service_request},
+        {"fullUrl": urls["questionnaire-response"], "resource": questionnaire_response},
+    ]
+    if location:
+        entries.append({"fullUrl": urls["location"], "resource": location})
+    entries += [
+        {"fullUrl": doc_urls[i], "resource": doc}
+        for i, doc in enumerate(document_references)
+    ]
+
+    return {
+        "resourceType": "Bundle",
+        "id": f"pas-request-{request_id}",
+        "meta": {
+            "profile": [PAS_REQUEST_BUNDLE_PROFILE],
+            "tag": [{
+                "system": f"{LOCAL_CS_BASE}/artifact-tag",
+                "code": "synthetic-demo",
+                "display": FHIR_DISCLAIMER,
+            }],
+        },
+        "type": "collection",
+        "timestamp": now,
+        "entry": entries,
+    }
